@@ -192,6 +192,8 @@ class LXMessage:
         self.__pn_encrypted_data     = None
         self.__persist_lock          = Lock()
         self.failed_callback         = None
+        self.receipt_timeout         = None
+        self.concluded_callback      = None
         
         self.deferred_stamp_generating = False
 
@@ -472,11 +474,14 @@ class LXMessage:
         if self.method == LXMessage.OPPORTUNISTIC:
             lxm_packet = self.__as_packet()
             receipt = lxm_packet.send()
-            if receipt: receipt.set_delivery_callback(self.__mark_delivered)
-            else: RNS.log(f"No receipt generated on sent opportunistic {self}", RNS.LOG_WARNING)
             self.progress = 0.50
             self.ratchet_id = lxm_packet.ratchet_id
             self.state = LXMessage.SENT
+            if receipt:
+                receipt.set_delivery_callback(self.__mark_delivered)
+                if self.receipt_timeout: receipt.set_timeout(max(receipt.timeout, self.receipt_timeout))
+                if receipt.status == RNS.PacketReceipt.DELIVERED: self.__mark_delivered(receipt)
+            else: RNS.log(f"No receipt generated on sent opportunistic {self}", RNS.LOG_WARNING)
         
         elif self.method == LXMessage.DIRECT:
             self.state = LXMessage.SENDING
@@ -486,12 +491,14 @@ class LXMessage:
                 receipt = lxm_packet.send()
                 self.ratchet_id = self.__delivery_destination.link_id
                 if receipt:
+                    self.progress = 0.50
                     receipt.set_delivery_callback(self.__mark_delivered)
                     receipt.set_timeout_callback(self.__link_packet_timed_out)
-                    self.progress = 0.50
+                    if receipt.status == RNS.PacketReceipt.DELIVERED: self.__mark_delivered(receipt)
                 else:
                     if self.__delivery_destination:
                         self.__delivery_destination.teardown()
+                    self.state = LXMessage.OUTBOUND
 
             elif self.representation == LXMessage.RESOURCE:
                 self.resource_representation = self.__as_resource()
@@ -504,11 +511,13 @@ class LXMessage:
             if self.representation == LXMessage.PACKET:
                 receipt = self.__as_packet().send()
                 if receipt:
+                    self.progress = 0.50
                     receipt.set_delivery_callback(self.__mark_propagated)
                     receipt.set_timeout_callback(self.__link_packet_timed_out)
-                    self.progress = 0.50
+                    if receipt.status == RNS.PacketReceipt.DELIVERED: self.__mark_propagated(receipt)
                 else:
                     self.__delivery_destination.teardown()
+                    self.state = LXMessage.OUTBOUND
 
             elif self.representation == LXMessage.RESOURCE:
                 self.resource_representation = self.__as_resource()
@@ -566,9 +575,12 @@ class LXMessage:
             self.transport_encryption = LXMessage.ENCRYPTION_DESCRIPTION_UNENCRYPTED
 
     def __mark_delivered(self, receipt = None):
+        if self.state == LXMessage.DELIVERED: return
         RNS.log("Received delivery notification for "+str(self), RNS.LOG_DEBUG)
         self.state = LXMessage.DELIVERED
         self.progress = 1.0
+
+        if self.concluded_callback != None and callable(self.concluded_callback): self.concluded_callback(self)
 
         if self.__delivery_callback != None and callable(self.__delivery_callback):
             try:
@@ -578,9 +590,12 @@ class LXMessage:
                     RNS.trace_exception(e)
 
     def __mark_propagated(self, receipt = None):
+        if self.state == LXMessage.SENT: return
         RNS.log("Received propagation success notification for "+str(self), RNS.LOG_DEBUG)
         self.state = LXMessage.SENT
         self.progress = 1.0
+
+        if self.concluded_callback != None and callable(self.concluded_callback): self.concluded_callback(self)
 
         if self.__delivery_callback != None and callable(self.__delivery_callback):
             try:
