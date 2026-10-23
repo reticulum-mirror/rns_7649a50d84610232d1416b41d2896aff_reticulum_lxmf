@@ -428,7 +428,7 @@ def job_android(stamp_cost, workblock, message_id):
 
     active_jobs[message_id] = False;
 
-    RNS.log(f"Dispatching {jobs} workers for stamp generation...", RNS.LOG_DEBUG) # TODO: Remove
+    RNS.log(f"Dispatching {jobs} workers for stamp generation...", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
     results_dict = wm.dict()
     while stamp == None and active_jobs[message_id] == False:
@@ -455,7 +455,7 @@ def job_android(stamp_cost, workblock, message_id):
                 RNS.log(f"Stamp generation running. {total_rounds} rounds completed so far, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
         
         except Exception as e:
-            RNS.log(f"Stamp generation job error: {e}")
+            RNS.log(f"Stamp generation job error: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
     active_jobs.pop(message_id)
