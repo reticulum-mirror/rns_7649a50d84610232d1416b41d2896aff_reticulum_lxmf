@@ -21,7 +21,7 @@ STOP_CHECK_INTERVAL             = 64
 active_jobs = {}
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 14:
-    USE_WORKER_MANAGER          = True
+    USE_WORKER_MANAGER = True
 
 @contextlib.contextmanager
 def worker_context(ctx, stamp_cost, workblock, message_id):
