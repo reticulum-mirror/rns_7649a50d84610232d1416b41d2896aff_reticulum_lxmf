@@ -15,6 +15,8 @@ WORKBLOCK_EXPAND_ROUNDS_PEERING = 25
 STAMP_SIZE                      = RNS.Identity.HASHLENGTH//8
 PN_VALIDATION_POOL_MIN_SIZE     = 256
 USE_WORKER_MANAGER              = False
+POOLING_THRESHOLD_COST          = 15
+STOP_CHECK_INTERVAL             = 64
 
 active_jobs = {}
 
@@ -46,7 +48,8 @@ def worker_context(ctx, stamp_cost, workblock, message_id):
         rounds_queue.join_thread()
         stop_event.clear()
 
-def stamp_workblock(material, expand_rounds=WORKBLOCK_EXPAND_ROUNDS):
+def stamp_workblock(material, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=False):
+    if no_expand or not expand_rounds: return material
     wb_st = time.time()
     workblock = b""
     for n in range(expand_rounds):
@@ -120,26 +123,29 @@ def validate_pn_stamps(transient_list, target_cost):
     if len(transient_list) <= PN_VALIDATION_POOL_MIN_SIZE or non_mp_platform: return validate_pn_stamps_job_simple(transient_list, target_cost)
     else:                                                                     return validate_pn_stamps_job_multip(transient_list, target_cost)
 
-def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS):
+def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=False):
     RNS.log(f"Generating stamp with cost {stamp_cost} for {RNS.prettyhexrep(message_id)}...", RNS.LOG_DEBUG)
-    workblock = stamp_workblock(message_id, expand_rounds=expand_rounds)
+    workblock = stamp_workblock(message_id, expand_rounds=expand_rounds, no_expand=no_expand)
     
     start_time = time.time()
     stamp = None
     rounds = 0
     value = 0
 
+    if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
+        RNS.log(f"Running stamp generation on {platform}, work limited to single CPU core. This will be slower than ideal.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin(): stamp, rounds = job_simple(stamp_cost, workblock, message_id)
     elif RNS.vendor.platformutils.is_android(): stamp, rounds = job_android(stamp_cost, workblock, message_id)
     else:
-        if USE_WORKER_MANAGER: stamp, rounds = job_linux_managed(stamp_cost, workblock, message_id)
-        else:                  stamp, rounds = job_linux(stamp_cost, workblock, message_id)
+        if USE_WORKER_MANAGER: stamp, rounds = job_linux_managed(stamp_cost, workblock, message_id) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id)
+        else:                  stamp, rounds = job_linux(stamp_cost, workblock, message_id) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id)
     
     duration = max(time.time()-start_time, 1E-6)
     speed = rounds/duration
     if stamp != None: value = stamp_value(workblock, stamp)
 
-    RNS.log(f"Stamp with value {value} generated in {RNS.prettytime(duration)}, {rounds} rounds, {int(speed)} rounds per second", RNS.LOG_DEBUG)
+    RNS.log(f"Stamp with value {value} generated in {RNS.prettytime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
     return stamp, value
 
@@ -181,33 +187,31 @@ def job_simple(stamp_cost, workblock, message_id):
     # as a fall-back, in case of limited multi-
     # processing and/or acceleration support.
 
-    platform = RNS.vendor.platformutils.get_platform()
-    RNS.log(f"Running stamp generation on {platform}, work limited to single CPU core. This will be slower than ideal.", RNS.LOG_WARNING)
-
     rounds = 0
     pstamp = os.urandom(256//8)
     st = time.time()
 
-    active_jobs[message_id] = False;
+    active_jobs[message_id] = False
 
-    def sv(s, c, w):
-        target = 0b1<<256-c; m = w+s
-        result = RNS.Identity.full_hash(m)
-        if int.from_bytes(result, byteorder="big") > target: return False
-        else:                                                return True
+    target = 0b1<<256-stamp_cost
+    c = 0
 
-    while not sv(pstamp, stamp_cost, workblock) and not active_jobs[message_id]:
+    while True:
+        c += 1
+        if c >= STOP_CHECK_INTERVAL:
+            c = 0
+            if active_jobs[message_id]: break
+
+        if int.from_bytes(RNS.Identity.full_hash(workblock+pstamp), byteorder="big") <= target: break
         pstamp = os.urandom(256//8); rounds += 1
-        if rounds % 2500 == 0:
+
+        if rounds % 250000 == 0:
             speed = rounds / max(time.time()-st, 1E-6)
-            RNS.log(f"Stamp generation running. {rounds} rounds completed so far, {int(speed)} rounds per second", RNS.LOG_DEBUG)
+            RNS.log(f"Stamp generation running. {rounds} rounds completed so far, {RNS.prettysize(speed, suffix='')} rounds per second", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
-    if active_jobs[message_id] == True:
-        pstamp = None
-
+    cancelled = (active_jobs[message_id] == True)
     active_jobs.pop(message_id)
-    
-    return pstamp, rounds
+    return (None if cancelled else pstamp), rounds
 
 def job_linux_managed(stamp_cost, workblock, message_id):
     ctx = multiprocessing.get_context("fork")
@@ -221,18 +225,18 @@ def job_linux_managed(stamp_cost, workblock, message_id):
     with worker_context(ctx, stamp_cost, workblock, message_id) as (stop_event, result_queue, rounds_queue, job_procs):
         RNS.log(f"Starting {jobs} stamp generation workers", RNS.LOG_DEBUG)
         
-        def job(stop_event, sc, wb, worker_id):
-            terminated = False
-            rounds = 0
-            pstamp = os.urandom(256//8)
+        def job(stop_event, sc, wb, pn):
+            rounds = 0; pstamp = os.urandom(256//8);
+            target = 0b1<<256 - sc; c = 0
 
-            def sv(s, c, w):
-                target = 0b1<<256-c; m = w+s
-                result = RNS.Identity.full_hash(m)
-                if int.from_bytes(result, byteorder="big") > target: return False
-                else:                                                return True
+            while True:
+                c += 1
+                if c >= STOP_CHECK_INTERVAL:
+                    c = 0
+                    if stop_event.is_set(): break
 
-            while not stop_event.is_set() and not sv(pstamp, sc, wb):
+                m = wb+pstamp
+                if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
                 pstamp = os.urandom(256//8); rounds += 1
 
             if not stop_event.is_set():
@@ -273,7 +277,7 @@ def job_linux_managed(stamp_cost, workblock, message_id):
             if not any(p.is_alive() for p in job_procs):
                 all_exited = True
                 break
-            time.sleep(0.1)
+            time.sleep(0.005)
 
         if not all_exited:
             RNS.log("Stamp generation IPC timeout, possible worker deadlock. Terminating remaining processes.", RNS.LOG_ERROR)
@@ -304,24 +308,23 @@ def job_linux(stamp_cost, workblock, message_id):
     rounds_queue = multiprocessing.Queue()
 
     def job(stop_event, pn, sc, wb):
-        terminated = False
-        rounds = 0
-        pstamp = os.urandom(256//8)
+        rounds = 0; pstamp = os.urandom(256//8);
+        target = 0b1<<256 - sc; c = 0
 
-        def sv(s, c, w):
-            target = 0b1<<256-c; m = w+s
-            result = RNS.Identity.full_hash(m)
-            if int.from_bytes(result, byteorder="big") > target:
-                return False
-            else:
-                return True
+        while True:
+            c += 1
+            if c >= STOP_CHECK_INTERVAL:
+                c = 0
+                if stop_event.is_set(): break
 
-        while not stop_event.is_set() and not sv(pstamp, sc, wb):
+            m = wb+pstamp
+            if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
             pstamp = os.urandom(256//8); rounds += 1
 
         if not stop_event.is_set():
             stop_event.set()
             result_queue.put(pstamp)
+
         rounds_queue.put(rounds)
     
     job_procs = []
@@ -333,44 +336,47 @@ def job_linux(stamp_cost, workblock, message_id):
 
     active_jobs[message_id] = [stop_event, result_queue]
 
-    stamp = result_queue.get()
-
-    # Collect any potential spurious
-    # results from worker queue.
     try:
-        while True: result_queue.get_nowait()
-    except: pass
+        stamp = result_queue.get()
 
-    for j in range(jobs):
-        nrounds = 0
+        # Collect any potential spurious
+        # results from worker queue.
         try:
-            nrounds = rounds_queue.get(timeout=2)
-        except Exception as e:
-            RNS.log(f"Failed to get round stats part {j}: {e}", RNS.LOG_ERROR)
-        total_rounds += nrounds
+            while True: result_queue.get_nowait()
+        except: pass
 
-    all_exited = False
-    exit_timeout = time.time() + 5
-    while time.time() < exit_timeout:
-        if not any(p.is_alive() for p in job_procs):
-            all_exited = True
-            break
-        time.sleep(0.1)
+        for j in range(jobs):
+            nrounds = 0
+            try:
+                nrounds = rounds_queue.get(timeout=2)
+            except Exception as e:
+                RNS.log(f"Failed to get round stats part {j}: {e}", RNS.LOG_ERROR)
+            total_rounds += nrounds
 
-    if not all_exited:
-        RNS.log("Stamp generation IPC timeout, possible worker deadlock. Terminating remaining processes.", RNS.LOG_ERROR)
-        if allow_kill:
+        all_exited = False
+        exit_timeout = time.time() + 5
+        while time.time() < exit_timeout:
+            if not any(p.is_alive() for p in job_procs):
+                all_exited = True
+                break
+            time.sleep(0.005)
+
+        if not all_exited:
+            RNS.log("Stamp generation IPC timeout, possible worker deadlock. Terminating remaining processes.", RNS.LOG_ERROR)
+            if allow_kill:
+                for j in range(jobs):
+                    process = job_procs[j]
+                    process.kill()
+            else:
+                return None
+
+        else:
             for j in range(jobs):
                 process = job_procs[j]
-                process.kill()
-        else:
-            return None
+                process.join()
 
-    else:
-        for j in range(jobs):
-            process = job_procs[j]
-            process.join()
-            # RNS.log(f"Joined {j} / {process}", RNS.LOG_DEBUG) # TODO: Remove
+    except Exception as e: RNS.log(f"Error while getting stamp generation result: {e}", RNS.LOG_ERROR)
+    finally: active_jobs.pop(message_id, None)
 
     return stamp, total_rounds
 
@@ -390,46 +396,32 @@ def job_android(stamp_cost, workblock, message_id):
         import nacl.encoding
         import nacl.hash
         use_nacl = True
-    except:
-        pass
+    except: pass
 
     if use_nacl:
-        def full_hash(m):
-            return nacl.hash.sha256(m, encoder=nacl.encoding.RawEncoder)
+        def full_hash(m): return nacl.hash.sha256(m, encoder=nacl.encoding.RawEncoder)
     else:
-        def full_hash(m):
-            return RNS.Identity.full_hash(m)
-
-    def sv(s, c, w):
-        target = 0b1<<256-c
-        m = w+s
-        result = full_hash(m)
-        if int.from_bytes(result, byteorder="big") > target:
-            return False
-        else:
-            return True
+        def full_hash(m): return RNS.Identity.full_hash(m)
 
     wm = multiprocessing.Manager()
     jobs = multiprocessing.cpu_count()
 
     def job(procnum=None, results_dict=None, wb=None, sc=None, jr=None):
-        # RNS.log(f"Worker {procnum} starting for {jr} rounds...") # TODO: Remove
         try:
             rounds = 0
             found_stamp = None
+            target = 0b1<<256-sc
+            fh = full_hash
 
             while True:
                 pstamp = os.urandom(256//8)
                 rounds += 1
-                if sv(pstamp, sc, wb):
-                    found_stamp = pstamp
-                    break
-
-                if rounds >= jr:
-                    # RNS.log(f"Worker {procnum} found no result in {rounds} rounds") # TODO: Remove
-                    break
+                if int.from_bytes(fh(wb+pstamp), byteorder="big") <= target:
+                    found_stamp = pstamp; break
+                if rounds >= jr: break
 
             results_dict[procnum] = [found_stamp, rounds]
+
         except Exception as e:
             RNS.log(f"Stamp generation worker error: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
@@ -460,7 +452,7 @@ def job_android(stamp_cost, workblock, message_id):
             if stamp == None:
                 elapsed = max(time.time()-start_time, 1E-6)
                 speed = total_rounds/elapsed
-                RNS.log(f"Stamp generation running. {total_rounds} rounds completed so far, {int(speed)} rounds per second", RNS.LOG_DEBUG)
+                RNS.log(f"Stamp generation running. {total_rounds} rounds completed so far, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
         
         except Exception as e:
             RNS.log(f"Stamp generation job error: {e}")
@@ -514,6 +506,11 @@ if __name__ == "__main__":
         RNS.log("Testing peering key generation", RNS.LOG_DEBUG)
         message_id = os.urandom(32)
         generate_stamp(message_id, cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS_PEERING)
+
+        RNS.log("", RNS.LOG_DEBUG)
+        RNS.log("Testing non-expanded workblock generation", RNS.LOG_DEBUG)
+        message_id = os.urandom(32)
+        generate_stamp(message_id, cost, expand_rounds=0)
 
         # transient_list = []
         # st = time.time(); count = 10000
