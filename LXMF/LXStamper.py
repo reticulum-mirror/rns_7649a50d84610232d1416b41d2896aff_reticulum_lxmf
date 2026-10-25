@@ -133,7 +133,7 @@ def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS
     value = 0
 
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
-        RNS.log(f"Running stamp generation on {platform}, work limited to single CPU core. This will be slower than ideal.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+        RNS.log(f"Multi-core stamp generation on this platform is not supported, work limited to single CPU core.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin(): stamp, rounds = job_simple(stamp_cost, workblock, message_id)
     elif RNS.vendor.platformutils.is_android(): stamp, rounds = job_android(stamp_cost, workblock, message_id)
@@ -493,19 +493,19 @@ if __name__ == "__main__":
         RNS.log("", RNS.LOG_DEBUG)
         RNS.log(f"Round {i+1} of {rounds}", RNS.LOG_DEBUG)
 
-        RNS.log("Testing LXMF stamp generation", RNS.LOG_DEBUG)
-        message_id = os.urandom(32)
-        generate_stamp(message_id, cost)
+        # RNS.log("Testing LXMF stamp generation", RNS.LOG_DEBUG)
+        # message_id = os.urandom(32)
+        # generate_stamp(message_id, cost)
 
-        RNS.log("", RNS.LOG_DEBUG)
-        RNS.log("Testing propagation stamp generation", RNS.LOG_DEBUG)
-        message_id = os.urandom(32)
-        generate_stamp(message_id, cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS_PN)
+        # RNS.log("", RNS.LOG_DEBUG)
+        # RNS.log("Testing propagation stamp generation", RNS.LOG_DEBUG)
+        # message_id = os.urandom(32)
+        # generate_stamp(message_id, cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS_PN)
 
-        RNS.log("", RNS.LOG_DEBUG)
-        RNS.log("Testing peering key generation", RNS.LOG_DEBUG)
-        message_id = os.urandom(32)
-        generate_stamp(message_id, cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS_PEERING)
+        # RNS.log("", RNS.LOG_DEBUG)
+        # RNS.log("Testing peering key generation", RNS.LOG_DEBUG)
+        # message_id = os.urandom(32)
+        # generate_stamp(message_id, cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS_PEERING)
 
         RNS.log("", RNS.LOG_DEBUG)
         RNS.log("Testing non-expanded workblock generation", RNS.LOG_DEBUG)
