@@ -198,14 +198,14 @@ def apply_config():
             active_configuration["propagation_stamp_cost_flexibility"] = LXMF.LXMRouter.PROPAGATION_COST_FLEX
         
         if "propagation" in lxmd_config and "peering_cost" in lxmd_config["propagation"]:
-            active_configuration["peering_cost"] = lxmd_config["propagation"].as_int("peering_cost")
+            active_configuration["peering_cost"] = lxmd_config["propagation"].as_float("peering_cost")
             if active_configuration["peering_cost"] < 0:
                 active_configuration["peering_cost"] = 0
         else:
             active_configuration["peering_cost"] = LXMF.LXMRouter.PEERING_COST
         
         if "propagation" in lxmd_config and "remote_peering_cost_max" in lxmd_config["propagation"]:
-            active_configuration["remote_peering_cost_max"] = lxmd_config["propagation"].as_int("remote_peering_cost_max")
+            active_configuration["remote_peering_cost_max"] = lxmd_config["propagation"].as_float("remote_peering_cost_max")
             if active_configuration["remote_peering_cost_max"] < 0:
                 active_configuration["remote_peering_cost_max"] = 0
         else:
