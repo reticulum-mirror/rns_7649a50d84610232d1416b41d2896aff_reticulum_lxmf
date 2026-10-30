@@ -64,6 +64,14 @@ class LXMFPropagationAnnounceHandler:
                         propagation_stamp_cost_flexibility = int(data[5][1])
                         peering_cost                       = int(data[5][2])
                         metadata                           =     data[6]
+
+                        # Transitional mechanism, extract the real, fractional-value
+                        # propagation stamp cost if available.
+                        if len(data) > 7:
+                            propagation_stamp_cost = data[7][0]
+                            propagation_stamp_cost_flexibility = data[7][1]
+                            peering_cost = data[7][2]
+                        # TODO: Remove above after 1.6.2 ###########################
                         
                         if destination_hash in self.lxmrouter.static_peers:
                             static_peer = self.lxmrouter.peers[destination_hash]

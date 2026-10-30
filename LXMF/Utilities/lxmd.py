@@ -88,9 +88,9 @@ def apply_config():
             active_configuration["peer_announce_interval"] = None
         
         if "lxmf" in lxmd_config and "stamp_cost" in lxmd_config["lxmf"]:
-            active_configuration["peer_stamp_cost"] = max(1, lxmd_config["lxmf"].as_int("stamp_cost"))
+            active_configuration["peer_stamp_cost"] = max(1, lxmd_config["lxmf"].as_float("stamp_cost"))
         else:
-            active_configuration["peer_stamp_cost"] = 12
+            active_configuration["peer_stamp_cost"] = 12.0
         
         if "lxmf" in lxmd_config and "delivery_transfer_max_accepted_size" in lxmd_config["lxmf"]:
             active_configuration["delivery_transfer_max_accepted_size"] = lxmd_config["lxmf"].as_float("delivery_transfer_max_accepted_size")
@@ -184,14 +184,14 @@ def apply_config():
             active_configuration["propagation_sync_max_accepted_size"] = 256*40
         
         if "propagation" in lxmd_config and "propagation_stamp_cost_target" in lxmd_config["propagation"]:
-            active_configuration["propagation_stamp_cost_target"] = lxmd_config["propagation"].as_int("propagation_stamp_cost_target")
+            active_configuration["propagation_stamp_cost_target"] = lxmd_config["propagation"].as_float("propagation_stamp_cost_target")
             if active_configuration["propagation_stamp_cost_target"] < LXMF.LXMRouter.PROPAGATION_COST_MIN:
                 active_configuration["propagation_stamp_cost_target"] = LXMF.LXMRouter.PROPAGATION_COST_MIN
         else:
             active_configuration["propagation_stamp_cost_target"] = LXMF.LXMRouter.PROPAGATION_COST
         
         if "propagation" in lxmd_config and "propagation_stamp_cost_flexibility" in lxmd_config["propagation"]:
-            active_configuration["propagation_stamp_cost_flexibility"] = lxmd_config["propagation"].as_int("propagation_stamp_cost_flexibility")
+            active_configuration["propagation_stamp_cost_flexibility"] = lxmd_config["propagation"].as_float("propagation_stamp_cost_flexibility")
             if active_configuration["propagation_stamp_cost_flexibility"] < 0:
                 active_configuration["propagation_stamp_cost_flexibility"] = 0
         else:
@@ -1027,7 +1027,7 @@ autopeer_maxdepth = 6
 # You can configure the target stamp cost
 # required to deliver messages via this node.
 
-# propagation_stamp_cost_target = 16
+# propagation_stamp_cost_target = 16.0
 
 # If set higher than 0, the stamp cost flexi-
 # bility option will make this node accept
@@ -1036,13 +1036,13 @@ autopeer_maxdepth = 6
 # not from peers directly). This allows the
 # network to gradually adjust stamp cost.
 
-# propagation_stamp_cost_flexibility = 3
+# propagation_stamp_cost_flexibility = 3.0
 
 # The peering_cost option configures the target
 # value required for a remote node to peer with
 # and deliver messages to this node.
 
-# peering_cost = 18
+# peering_cost = 18.0
 
 # You can configure the maximum peering cost
 # of remote nodes that this node will peer with.
@@ -1052,7 +1052,7 @@ autopeer_maxdepth = 6
 # more computation time during initial peering
 # when generating the peering key.
 
-# remote_peering_cost_max = 26
+# remote_peering_cost_max = 26.0
 
 # You can tell the LXMF message router to
 # prioritise storage for one or more

@@ -180,7 +180,12 @@ def stamp_cost_from_app_data(app_data=None):
             peer_data = msgpack.unpackb(app_data)
             if type(peer_data) == list:
                 if len(peer_data) < 2: return None
-                else: return peer_data[1]
+                else:
+                    if len(peer_data) > 3:
+                        cost_type = type(peer_data[3])
+                        if cost_type == float or cost_type == int: return peer_data[3]
+                        else:                                      return peer_data[1]
+                    else: return peer_data[1]
 
         # Original announce format
         else: return None
@@ -218,7 +223,8 @@ def pn_stamp_cost_from_app_data(app_data=None):
     else:
         if pn_announce_data_is_valid(app_data):
             data = msgpack.unpackb(app_data)
-            return data[5][0]
+            if len(data) > 7: return data[7][0]
+            else:             return data[5][0]
         
         else: return None
 
@@ -236,13 +242,23 @@ def pn_announce_data_is_valid(data):
             try:                                     int(data[4])
             except:                                  raise ValueError("Invalid announce data: Could not decode propagation sync limit")
             if type(data[5]) != list:                raise ValueError("Invalid announce data: Could not decode stamp costs")
-            try:                                     int(data[5][0])
+            try:                                     float(data[5][0])
             except:                                  raise ValueError("Invalid announce data: Could not decode target stamp cost")
-            try:                                     int(data[5][1])
+            try:                                     float(data[5][1])
             except:                                  raise ValueError("Invalid announce data: Could not decode stamp cost flexibility")
-            try:                                     int(data[5][2])
+            try:                                     float(data[5][2])
             except:                                  raise ValueError("Invalid announce data: Could not decode peering cost")
             if type(data[6]) != dict:                raise ValueError("Invalid announce data: Could not decode metadata")
+
+            # TODO: Transitional mechanism, remove after 1.6.2
+            if len(data) > 7:
+                if type(data[7]) != list:            raise ValueError("Invalid announce data: Could not decode fractional stamp costs")
+                try:                                 float(data[7][0])
+                except:                              raise ValueError("Invalid announce data: Could not decode target stamp cost")
+                try:                                 float(data[7][1])
+                except:                              raise ValueError("Invalid announce data: Could not decode stamp cost flexibility")
+                try:                                 float(data[7][2])
+                except:                              raise ValueError("Invalid announce data: Could not decode peering cost")
     
     except Exception as e:
         RNS.log(f"Could not validate propagation node announce data: {e}", RNS.LOG_DEBUG)

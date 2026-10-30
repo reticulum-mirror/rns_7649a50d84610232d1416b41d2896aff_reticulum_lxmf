@@ -673,9 +673,9 @@ class LXMessage:
             raise ConnectionError("Tried to synthesize resource for LXMF message on a link that was not active")
 
         if self.method == LXMessage.DIRECT:
-            return RNS.Resource(self.packed, self.__delivery_destination, callback = self.__resource_concluded, progress_callback = self.__update_transfer_progress, auto_compress=self.auto_compress)
+            return RNS.Resource(self.packed, self.__delivery_destination, callback=self.__resource_concluded, progress_callback=self.__update_transfer_progress, auto_compress=self.auto_compress)
         elif self.method == LXMessage.PROPAGATED:
-            return RNS.Resource(self.propagation_packed, self.__delivery_destination, callback = self.__propagation_resource_concluded, progress_callback = self.__update_transfer_progress)
+            return RNS.Resource(self.propagation_packed, self.__delivery_destination, app_flag=True, callback=self.__propagation_resource_concluded, progress_callback=self.__update_transfer_progress)
         else:
             return None
 

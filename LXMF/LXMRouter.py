@@ -26,7 +26,11 @@ from .LXMessage import LXMessage
 from .Handlers import LXMFDeliveryAnnounceHandler
 from .Handlers import LXMFPropagationAnnounceHandler
 
+from RNS.Stamps import quantize_cost
+
 import LXMF.LXStamper as LXStamper
+
+from math import ceil # TODO: Transitory import, remove after RNS 1.6.2
 
 class LXMRouter:
     MAX_DELIVERY_ATTEMPTS = 5
@@ -52,11 +56,11 @@ class LXMRouter:
     ROTATION_HEADROOM_PCT = 10
     ROTATION_AR_MAX       = 0.5
 
-    PEERING_COST          = 18
-    MAX_PEERING_COST      = 26
-    PROPAGATION_COST_MIN  = 13
-    PROPAGATION_COST_FLEX = 3
-    PROPAGATION_COST      = 16
+    PEERING_COST          = 18.0
+    MAX_PEERING_COST      = 26.0
+    PROPAGATION_COST_MIN  = 13.0
+    PROPAGATION_COST_FLEX =  3.0
+    PROPAGATION_COST      = 16.0
     PROPAGATION_LIMIT     = 256
     SEQUENTIAL_VALIDATION = True
     STATIC_SEQUENTIAL     = False
@@ -334,14 +338,16 @@ class LXMRouter:
     def get_propagation_node_app_data(self):
         metadata      = self.get_propagation_node_announce_metadata()
         node_state    = self.propagation_node and not self.from_static_only
-        stamp_cost    = [self.propagation_stamp_cost, self.propagation_stamp_cost_flexibility, self.peering_cost]
+        stamp_costs   = [self.propagation_stamp_cost, self.propagation_stamp_cost_flexibility, self.peering_cost]
+        ceil_costs    = [ceil(self.propagation_stamp_cost), ceil(self.propagation_stamp_cost_flexibility), ceil(self.peering_cost)]
         announce_data = [ False,                                  # 0: Legacy LXMF PN support
                           int(time.time()),                       # 1: Current node timebase
                           node_state,                             # 2: Boolean flag signalling propagation node state
                           self.propagation_per_transfer_limit,    # 3: Per-transfer limit for message propagation in kilobytes
                           self.propagation_per_sync_limit,        # 4: Limit for incoming propagation node syncs
-                          stamp_cost,                             # 5: Propagation stamp cost for this node
-                          metadata ]                              # 6: Node metadata
+                          ceil_costs,                             # 5: Propagation stamp cost for this node
+                          metadata,                               # 6: Node metadata
+                          stamp_costs ]                           # 7: Transitional fractional-value stamp cost, will disappear after 1.6.2, where they will be in 5 directly
 
         return msgpack.packb(announce_data)
 
@@ -388,17 +394,19 @@ class LXMRouter:
     def set_inbound_stamp_cost(self, destination_hash, stamp_cost):
         if destination_hash in self.delivery_destinations:
             delivery_destination = self.delivery_destinations[destination_hash]
+            cap = RNS.Transport.STAMP_COST_CAP
             if stamp_cost == None:
                 delivery_destination.stamp_cost = None
                 return True
             elif type(stamp_cost) == int:
-                if stamp_cost < 1:
-                    delivery_destination.stamp_cost = None
-                elif stamp_cost < 255:
-                    delivery_destination.stamp_cost = stamp_cost
-                else:
-                    return False
-    
+                if stamp_cost < 1:     delivery_destination.stamp_cost = None
+                elif stamp_cost < cap: delivery_destination.stamp_cost = stamp_cost
+                else:                  return False
+                return True
+            elif type(stamp_cost) == float:
+                if stamp_cost < 1:     delivery_destination.stamp_cost = None
+                elif stamp_cost < cap: delivery_destination.stamp_cost = stamp_cost
+                else:                  return False
                 return True
 
         return False
@@ -434,7 +442,8 @@ class LXMRouter:
         pn_app_data = RNS.Identity.recall_app_data(pn_destination_hash)
         if pn_announce_data_is_valid(pn_app_data):
             pn_config = msgpack.unpackb(pn_app_data)
-            target_propagation_cost = pn_config[5][0]
+            if len(pn_config) > 7: target_propagation_cost = pn_config[7][0]
+            else:                  target_propagation_cost = pn_config[5][0]
 
         if not target_propagation_cost:
             RNS.log(f"Could not retrieve cached propagation node config. Requesting path to propagation node to get target propagation cost...", RNS.LOG_DEBUG)
@@ -446,9 +455,12 @@ class LXMRouter:
             pn_app_data = RNS.Identity.recall_app_data(pn_destination_hash)
             if pn_announce_data_is_valid(pn_app_data):
                 pn_config = msgpack.unpackb(pn_app_data)
-                target_propagation_cost = pn_config[5][0]
+                if len(pn_config) > 7: target_propagation_cost = pn_config[7][0]
+                else:                  target_propagation_cost = pn_config[5][0]
 
+        if type(target_propagation_cost) not in (float, int) and target_propagation_cost != None: return None
         if not target_propagation_cost: RNS.log("Propagation node stamp cost still unavailable after path request", RNS.LOG_ERROR)
+        if target_propagation_cost != None: target_propagation_cost = max(0, min(target_propagation_cost, RNS.Transport.STAMP_COST_CAP))
         return target_propagation_cost
 
     def set_inbound_propagation_node(self, destination_hash):
@@ -581,7 +593,7 @@ class LXMRouter:
                             try:
                                 transient_id       = bytes.fromhex(components[0])
                                 received           = float(components[1])
-                                stamp_value        = int(components[2])
+                                stamp_value        = quantize_cost(components[2])
                                 filepath           = self.messagepath+"/"+filename
                                 msg_size           = os.path.getsize(filepath)
                                 file               = open(filepath, "rb")
@@ -1050,12 +1062,15 @@ class LXMRouter:
                 display_name = delivery_destination.display_name.encode("utf-8")
 
             stamp_cost = None
-            if delivery_destination.stamp_cost != None and type(delivery_destination.stamp_cost) == int:
-                if delivery_destination.stamp_cost > 0 and delivery_destination.stamp_cost < 255:
-                    stamp_cost = delivery_destination.stamp_cost
+            if delivery_destination.stamp_cost != None and (type(delivery_destination.stamp_cost) == int or type(delivery_destination.stamp_cost) == float):
+                if delivery_destination.stamp_cost > 0 and delivery_destination.stamp_cost < RNS.Transport.STAMP_COST_CAP:
+                    stamp_cost = quantize_cost(delivery_destination.stamp_cost)
 
             supported_functionality = [SF_COMPRESSION]
-            peer_data = [display_name, stamp_cost, supported_functionality]
+
+            # TODO: Transitional mechanism, remove after 1.6.2
+            peer_data = [display_name, ceil(stamp_cost) if stamp_cost else None, supported_functionality, stamp_cost]
+            # peer_data = [display_name, stamp_cost, supported_functionality]
 
             return msgpack.packb(peer_data)
 
@@ -1163,7 +1178,7 @@ class LXMRouter:
             filename    = os.path.split(filepath)[-1]
             components  = filename.split("_")
 
-            if len(components) == 3 and float(components[1]) > 0 and len(os.path.split(components[0])[1]) == (RNS.Identity.HASHLENGTH//8)*2 and int(components[2]) == stamp_value:
+            if len(components) == 3 and float(components[1]) > 0 and len(os.path.split(components[0])[1]) == (RNS.Identity.HASHLENGTH//8)*2 and quantize_cost(components[2]) == quantize_cost(stamp_value):
                 timestamp = float(components[1])
                 if now > timestamp+LXMRouter.MESSAGE_EXPIRY:
                     RNS.log("Purging message "+RNS.prettyhexrep(transient_id)+" due to expiry", RNS.LOG_EXTREME)
@@ -1481,13 +1496,9 @@ class LXMRouter:
     
     def identity_allowed(self, identity):
         if self.auth_required:
-            if identity.hash in self.allowed_list:
-                return True
-            else:
-                return False
-        
-        else:
-            return True
+            if identity.hash in self.allowed_list: return True
+            else:                                  return False
+        else:                                      return True
 
     def message_get_request(self, path, data, request_id, remote_identity, requested_at):
         if remote_identity == None:                      return LXMPeer.ERROR_NO_IDENTITY
@@ -2321,7 +2332,7 @@ class LXMRouter:
         return count
 
     def propagation_resource_advertised(self, resource):
-        if self.from_static_only:
+        if self.from_static_only and not resource.app_flag_set():
             remote_identity = resource.link.get_remote_identity()
             if remote_identity == None:
                 RNS.log(f"Rejecting propagation resource from unidentified peer", RNS.LOG_DEBUG)
@@ -2361,7 +2372,7 @@ class LXMRouter:
 
                 for validated_entry in validated_messages:
                     lxmf_data    = validated_entry[1]
-                    stamp_value  = validated_entry[2]
+                    stamp_value  = quantize_cost(validated_entry[2])
                     stamp_data   = validated_entry[3]
                     self.lxmf_propagation(lxmf_data, stamp_value=stamp_value, stamp_data=stamp_data)
                     self.client_propagation_messages_received += 1
@@ -2488,6 +2499,12 @@ class LXMRouter:
                                     remote_peering_cost   = pn_config[5][2]
                                     remote_metadata       = pn_config[6]
 
+                                    # TODO: Transitional mechanism, remove after 1.6.2
+                                    if len(pn_config) > 7:
+                                        remote_stamp_cost   = pn_config[7][0]
+                                        remote_stamp_flex   = pn_config[7][1]
+                                        remote_peering_cost = pn_config[7][2]
+
                                     RNS.log(f"Auto-peering with {remote_str} discovered via incoming sync", RNS.LOG_DEBUG) # TODO: Remove debug
                                     self.peer(remote_hash, remote_timebase, remote_transfer_limit, remote_sync_limit, remote_stamp_cost, remote_stamp_flex, remote_peering_cost, remote_metadata)
 
@@ -2543,7 +2560,7 @@ class LXMRouter:
                         for validated_entry in validated_messages:
                             transient_id = validated_entry[0]
                             lxmf_data    = validated_entry[1]
-                            stamp_value  = validated_entry[2]
+                            stamp_value  = quantize_cost(validated_entry[2])
                             stamp_data   = validated_entry[3]
                             peer         = None
                             
@@ -2626,6 +2643,12 @@ class LXMRouter:
                             if signal_local_delivery != None: return signal_local_delivery
                     else:
                         if self.propagation_node:
+                            if not stamp_value: return # TODO: This is edge-case handling for stamp-less paper messages being
+                                                       # ingested onto a propagation node, which is currently not possible,
+                                                       # but could potentially be supported somehow. Will need to figure this
+                                                       # one out at a more opportune moment. Potential local stamping at time
+                                                       # of ingress, if allowed by config.
+                            stamp_value     = quantize_cost(stamp_value)
                             stamped_data    = lxmf_data+stamp_data
                             value_component = f"_{stamp_value}" if stamp_value and stamp_value > 0 else ""
                             file_path       = f"{self.messagepath}/{RNS.hexrep(transient_id, delimit=False)}_{received}{value_component}"
@@ -2666,6 +2689,8 @@ class LXMRouter:
                 lxmf_data = base64.urlsafe_b64decode(uri.replace(LXMessage.URI_SCHEMA+"://", "").replace("/", "")+"==")
                 transient_id = RNS.Identity.full_hash(lxmf_data)
                 
+                # TODO: Consider whether to allow duplicate paper messages by
+                # default, and potential implications in client applications.
                 router_propagation_result = self.lxmf_propagation(lxmf_data, signal_local_delivery=signal_local_delivery, signal_duplicate=signal_duplicate, allow_duplicate=allow_duplicate, is_paper_message=True)
                 if router_propagation_result != False:
                     RNS.log("LXM with transient ID "+RNS.prettyhexrep(transient_id)+" was ingested.", RNS.LOG_DEBUG)

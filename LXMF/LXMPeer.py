@@ -79,17 +79,17 @@ class LXMPeer:
         else:       peer.propagation_sync_limit = peer.propagation_transfer_limit
 
         if "propagation_stamp_cost" in dictionary:
-            try:    peer.propagation_stamp_cost = int(dictionary["propagation_stamp_cost"])
+            try:    peer.propagation_stamp_cost = float(dictionary["propagation_stamp_cost"])
             except: peer.propagation_stamp_cost = None
         else:       peer.propagation_stamp_cost = None
 
         if "propagation_stamp_cost_flexibility" in dictionary:
-            try:    peer.propagation_stamp_cost_flexibility = int(dictionary["propagation_stamp_cost_flexibility"])
+            try:    peer.propagation_stamp_cost_flexibility = float(dictionary["propagation_stamp_cost_flexibility"])
             except: peer.propagation_stamp_cost_flexibility = None
         else:       peer.propagation_stamp_cost_flexibility = None
 
         if "peering_cost" in dictionary:
-            try:    peer.peering_cost = int(dictionary["peering_cost"])
+            try:    peer.peering_cost = float(dictionary["peering_cost"])
             except: peer.peering_cost = None
         else:       peer.peering_cost = None
 
